@@ -23,6 +23,14 @@ if (Buffer.byteLength(segredo) < 32) {
 }
 // ponytail: TTL fixo de 10 min (a spec pede 5-30); todos os processos precisam da mesma chave
 const codec = createRequestStateCodec({ key: segredo, ttlSeconds: 600 });
+// base64url tolera lixo nos bits finais: trocar o ultimo caractere por um "irmao" decodifica para
+// os mesmos bytes e passaria na assinatura. Exigimos a forma canonica para qualquer troca falhar.
+const verificarEstado = (estado, ctx) => {
+    const canonico = typeof estado === 'string' &&
+        estado.split('.').slice(1).every(p => Buffer.from(p, 'base64url').toString('base64url') === p);
+    if (!canonico) throw new Error('requestState fora da forma canonica');
+    return codec.verify(estado, ctx);
+};
 
 const salas = JSON.parse(readFileSync(join(DADOS, 'salas.json'), 'utf8'));
 const reservas = JSON.parse(readFileSync(join(DADOS, 'reservas.json'), 'utf8'));
@@ -156,7 +164,7 @@ async function reservarSala(args, ctx) {
 function criarServidor() {
     const server = new McpServer(
         { name: 'central-de-salas', version: '1.0.0' },
-        { capabilities: { tools: {}, resources: {} }, requestState: { verify: codec.verify } }
+        { capabilities: { tools: {}, resources: {} }, requestState: { verify: verificarEstado } }
     );
 
     server.registerTool('listar_salas', {

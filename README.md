@@ -12,19 +12,19 @@ Stack: Node.js 20+ (ESM, sem build), `@modelcontextprotocol/server` **2.4.0** (r
 A partir de um clone limpo (Node 20+ e Python 3.10+ no PATH; no Windows use `py` no lugar de `python3`):
 
 ```bash
-# 1. dependencias do servidor MCP (o agente nao tem)
+# uma vez: dependencias do servidor MCP (o agente nao tem)
 (cd servidor-mcp && npm ci)
 
-# 2. segredo de integridade do requestState (>= 32 bytes; gere o seu, nunca commite)
+# terminal 1: servidor MCP (o stderr traz metodo, id e traceparent de cada request)
+# o segredo de integridade do requestState (>= 32 bytes) precisa estar exportado NESTE terminal;
+# gere o seu e nunca o commite
 export REQUEST_STATE_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-
-# 3. terminal 1: servidor MCP (o stderr traz metodo, id e traceparent de cada request)
 cd servidor-mcp && node src/index.js
 
-# 4. terminal 2: agente
+# terminal 2: agente (nao precisa do segredo)
 cd agente && node src/index.js
 
-# 5. terminal 3: validador
+# terminal 3: validador, a partir da raiz do repositorio
 python3 validador/validar.py --agente http://localhost:7300 --mcp http://localhost:7301
 ```
 
@@ -38,11 +38,11 @@ Tudo em [agente/src/index.js](agente/src/index.js). O agente chama `reservar_sal
 
 A volta esta em `continuar` (linha ~141): o `SendMessage` com `taskId` e `escolha=<id>` e traduzido em `inputResponses` (`accept` com a sala, ou `decline` para `recusar`), e o agente repete o `tools/call` original com **id de JSON-RPC novo** (contador monotonico em `mcp()`), a mesma chave do `inputRequests` e o `requestState` ecoado byte a byte, sem abrir nem interpretar. Como o estado e por Task, duas Tasks pausadas ao mesmo tempo nao se misturam. O agente nao implementa regra de sala: conflito, politica e alternativas sao do servidor.
 
-No servidor, [servidor-mcp/src/index.js](servidor-mcp/src/index.js) emite o `input_required` em `reservarSala` (linha ~116) e o `requestState` selado volta a ele pelo hook `requestState.verify` antes do handler rodar.
+No servidor, [servidor-mcp/src/index.js](servidor-mcp/src/index.js) emite o `input_required` em `reservarSala` (linha ~124) e o `requestState` selado volta a ele pelo hook `requestState.verify` antes do handler rodar.
 
 ## Decisoes tecnicas
 
-- **Protecao do `requestState`:** HMAC-SHA256 pelo `createRequestStateCodec` do SDK (assinado, nao cifrado: o conteudo e legivel, nao adulteravel). Chave vem so de `REQUEST_STATE_SECRET` (>= 32 bytes, validado na subida). Adulterado ou expirado vira `-32602` ("Invalid or expired requestState") antes de o handler executar.
+- **Protecao do `requestState`:** HMAC-SHA256 pelo `createRequestStateCodec` do SDK (assinado, nao cifrado: o conteudo e legivel, nao adulteravel). Chave vem so de `REQUEST_STATE_SECRET` (>= 32 bytes, validado na subida). O hook de verificacao exige tambem a forma canonica do base64url: trocar o ultimo caractere por um "irmao" decodificaria para os mesmos bytes e passaria na assinatura, entao qualquer troca de caractere e rejeitada. Adulterado ou expirado vira `-32602` ("Invalid or expired requestState") antes de o handler executar.
 - **Validade:** 10 minutos (a spec pede entre 5 e 30), fixo no codigo.
 - **Servidor sem estado entre as rodadas:** o `requestState` carrega o pedido original e as alternativas calculadas; o retry reconstroi tudo a partir dele. Os argumentos reenviados no retry sao ignorados (vale o selado), e a sala escolhida e revalidada contra as alternativas seladas e contra os conflitos atuais. Por isso o retry funciona depois de reiniciar o servidor com a mesma chave.
 - **`-32021`:** quem emite e o proprio SDK, ao ver um `inputRequired` com elicitation form para cliente que nao declarou a capability no `_meta`. O mesmo vale para `-32602`/HTTP 400 sem `protocolVersion`/`clientCapabilities` e para `-32020` com header divergente.
@@ -57,7 +57,7 @@ No servidor, [servidor-mcp/src/index.js](servidor-mcp/src/index.js) emite o `inp
 Execucao com os dois processos recem-iniciados (`python3 validador/validar.py --agente http://localhost:7300 --mcp http://localhost:7301`, saida 0):
 
 ```
-trace-id desta execucao: 34715a55f9497edb99bd4c1954df7fad
+trace-id desta execucao: decd2af0b5e369263dac1ce9bf87e62b
 procure esse valor no stderr do servidor MCP para conferir a propagacao do traceparent.
 
 PASS 01 tools/list traz as tres tools
